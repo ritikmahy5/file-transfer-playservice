@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -39,13 +41,18 @@ func (s *Source) Fetch(name string) ([]byte, error) {
 	if !filesource.ValidName(name) {
 		return nil, fmt.Errorf("invalid file name %q", name)
 	}
+	// Experiment logging: one S3_FETCH line per GetObject, so re-downloads can be counted.
+	start := time.Now()
 	out, err := s.client.GetObject(context.Background(), &awss3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(s.prefix + name),
 	})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "S3_FETCH file=%v bytes=0 ms=%v err=%q\n", name, time.Since(start).Milliseconds(), err.Error())
 		return nil, err
 	}
 	defer out.Body.Close()
-	return io.ReadAll(out.Body)
+	data, err := io.ReadAll(out.Body)
+	fmt.Fprintf(os.Stderr, "S3_FETCH file=%v bytes=%v ms=%v\n", name, len(data), time.Since(start).Milliseconds())
+	return data, err
 }

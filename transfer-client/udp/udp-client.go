@@ -110,7 +110,7 @@ func RunClient(args []string) {
 // other than a timeout.
 // Side effects: opens and closes a UDP socket, writes OPEN and RETY datagrams, sets read
 // deadlines on that socket, and logs progress to stderr.
-func Fetch(address string, filename string) ([]byte, error) {
+func Fetch(address string, filename string) (data []byte, fetchErr error) {
 	var conn *net.UDPConn
 	defer func() {
 		if conn != nil {
@@ -120,7 +120,28 @@ func Fetch(address string, filename string) ([]byte, error) {
 
 	chunks := make(map[int]transferdata.TCP_Pack)
 	num_chunks := 0
+
+	// Experiment logging: one FETCH_SUMMARY line per transfer, written when Fetch returns.
+	start := time.Now()
+	opens, rounds, retried, after_open := 0, 0, 0, 0
+	defer func() {
+		result := "ok"
+		switch {
+		case errors.Is(fetchErr, ErrNoData):
+			result = "nodata"
+		case errors.Is(fetchErr, ErrIncomplete):
+			result = "incomplete"
+		case fetchErr != nil:
+			result = "error"
+		}
+		fmt.Fprintf(os.Stderr,
+			"FETCH_SUMMARY file=%v chunks=%v opens=%v after_open=%v rounds=%v retried=%v got=%v ms=%v result=%v\n",
+			filename, num_chunks, opens, after_open, rounds, retried, len(chunks),
+			time.Since(start).Milliseconds(), result)
+	}()
+
 	for attempt := 0; attempt < maxOpenAttempts && num_chunks == 0; attempt++ {
+		opens++
 		var err error
 		conn, err = redial(conn, address)
 		if err != nil {
@@ -138,6 +159,7 @@ func Fetch(address string, filename string) ([]byte, error) {
 	if num_chunks == 0 {
 		return nil, ErrNoData
 	}
+	after_open = len(chunks)
 
 	silent := false
 	for round := 0; round < maxRetryRounds; round++ {
@@ -154,6 +176,8 @@ func Fetch(address string, filename string) ([]byte, error) {
 			}
 		}
 		fmt.Fprintf(os.Stderr, "Missing chunks %v, retrying\n", missing)
+		rounds++
+		retried += len(missing)
 		for _, id := range missing {
 			_, err := fmt.Fprintf(conn, "RETY %v %v", filename, id)
 			if err != nil {
